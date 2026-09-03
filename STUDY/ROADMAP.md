@@ -5,8 +5,9 @@
 
 ## Phase 0 — 基础设施（Mac，一次性）
 - [x] 创建 `study-rlpd` 分支
-- [ ] fork rlpd 到个人 GitHub，配置 remote（origin=自己的 fork，upstream=上游）
-- [ ] 推送 `study-rlpd` 到 fork；Linux 上 clone fork 并 checkout 同分支
+- [x] fork rlpd 到个人 GitHub，配置 remote（origin=自己的 fork，upstream=上游）
+- [x] 推送 `study-rlpd` 到 fork
+- [ ] Linux 上 clone fork 并 checkout 同分支
 - [ ] 注册 wandb（浏览器）
 - [ ] 双机 `git rev-parse` 同 commit 验证
 
