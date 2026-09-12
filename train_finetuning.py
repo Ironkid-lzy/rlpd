@@ -249,7 +249,19 @@ def main(_):
             )
 
             # combine() 交错成单个 batch，交给 update() 内部按 utd_ratio 切份依次更新。
-            batch = combine(offline_batch, online_batch)
+            # 边界保护（实验A需要）: offline_ratio=0/1 时某一侧是空 batch（0 条），
+            # combine 的交错赋值 tmp[0::2]=空数组 会抛 ValueError（broadcast 失败）。
+            # 退化规则：某侧为空 → 只用非空侧，与比值取极限的语义一致
+            # （0 → 纯 online，1 → 纯 offline）。
+            n_offline = int(FLAGS.batch_size * FLAGS.utd_ratio * FLAGS.offline_ratio)
+            n_online = int(FLAGS.batch_size * FLAGS.utd_ratio * (1 - FLAGS.offline_ratio))
+            if n_offline == 0:
+                # 浅解冻 FrozenDict → 普通 dict，兼容下方 antmaze 分支的原地修改
+                batch = dict(online_batch)
+            elif n_online == 0:
+                batch = dict(offline_batch)
+            else:
+                batch = combine(offline_batch, online_batch)
 
             # antmaze 在线数据同样做 reward 整形（与离线侧一致）。
             if "antmaze" in FLAGS.env_name:
