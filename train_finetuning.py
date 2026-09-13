@@ -46,6 +46,14 @@ FLAGS = flags.FLAGS
 # 注意默认值: offline_ratio=0.5（每步 batch 一半来自离线数据）、
 # start_training=1e4（前 1 万步纯随机探索不更新）、utd_ratio=1（论文复现用 20）。
 flags.DEFINE_string("project_name", "rlpd", "wandb project name.")
+# exp_name: 实验标签，例如 r1_A_online / r1_B_rlpd_expert。
+# 作用（多 seed 对照实验防混淆的关键）:
+#   - wandb run name = "{exp_name}_s{seed}"，一眼看出属于哪个实验、哪个 seed
+#   - wandb group    = exp_name，网页上按 group 聚合：同一实验的 5 个 seed
+#                      自动合成 1 条 mean 曲线 + 阴影，而不是 5 条散线
+#   - 写入 wandb config，可按条件筛选
+#   - 带 r1_ 前缀用于区分"第几轮"实验，下轮改 r2_ 即可
+flags.DEFINE_string("exp_name", "exp", "Experiment label (wandb run name/group).")
 flags.DEFINE_string("env_name", "halfcheetah-expert-v2", "D4rl dataset name.")
 flags.DEFINE_float("offline_ratio", 0.5, "Offline ratio.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
@@ -106,17 +114,28 @@ def main(_):
     assert FLAGS.offline_ratio >= 0.0 and FLAGS.offline_ratio <= 1.0
 
     # wandb 是唯一的日志后端（硬依赖）。所有指标（loss、return）只走它。
-    wandb.init(project=FLAGS.project_name)
+    # name/group 是多 seed 对照实验的命名机制：
+    #   name  = "r1_B_rlpd_expert_s0"  唯一可辨（哪个实验 + 哪个 seed）
+    #   group = "r1_B_rlpd_expert"     网页按组聚合 → 1 条 mean±std 曲线
+    wandb.init(
+        project=FLAGS.project_name,
+        name=f"{FLAGS.exp_name}_s{FLAGS.seed}",
+        group=FLAGS.exp_name,
+    )
     wandb.config.update(FLAGS)
 
     # exp_prefix: 本次运行的标识（seed + pretrain 步数 + 是否 LayerNorm），
     # 用于 checkpoint 目录命名，方便区分多次运行。
-    exp_prefix = f"s{FLAGS.seed}_{FLAGS.pretrain_steps}pretrain"
+    exp_prefix = f"{FLAGS.exp_name}_s{FLAGS.seed}_{FLAGS.pretrain_steps}pretrain"
     if hasattr(FLAGS.config, "critic_layer_norm") and FLAGS.config.critic_layer_norm:
         exp_prefix += "_LN"
 
-    # ⚠️ 上游 bug: FLAGS.log_dir 从未被注册为 flag（absl 对未定义 flag 直接抛
-    # AttributeError）→ 任何运行都会在这里启动即崩。修复见 M1 作业。
+    # 澄清（2026-09-13 实证）: 这里并非"上游 bug"。log_dir 由 absl.logging 自动注册:
+    #   absl/logging/__init__.py: flags.DEFINE_string('log_dir',
+    #       os.getenv('TEST_TMPDIR', ''), 'directory to write logfiles into', ...)
+    # 默认值为 ''，故 os.path.join('', exp_prefix) == exp_prefix：
+    # → 不会崩，但 checkpoint/buffer 会落在【当前工作目录】下的相对路径。
+    # 若要集中管理，应显式定义自己的 --log_dir 并指向 results/ 等目录。
     log_dir = os.path.join(FLAGS.log_dir, exp_prefix)
 
     if FLAGS.checkpoint_model:
