@@ -57,9 +57,28 @@ flags.DEFINE_string("exp_name", "exp", "Experiment label (wandb run name/group).
 flags.DEFINE_string("env_name", "halfcheetah-expert-v2", "D4rl dataset name.")
 flags.DEFINE_float("offline_ratio", 0.5, "Offline ratio.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
+# --- R2 起相对上游的改动: 加密评估 ---
+# eval_interval: 5000 → 2500（eval_episodes 保持 10）
+#
+# 实测评估开销模型（RTX 5060 / halfcheetah / utd=20）:
+#   每个 episode ≈ 1.43 s（1000 步 × ~1.4 ms/步）
+#   慢的根源: 每步要调一次 agent.eval_actions()，即一次单样本 JAX 前向；
+#   这 1.4 ms 里绝大部分是 Python/JAX dispatch 开销而非 GPU 计算。
+#   ⚠ 不要用"纯仿真 env.step"的 0.036 ms/步 去估评估开销 —— 会低估约 40 倍。
+#
+# 于是总评估耗时 ∝ 评估次数 × episodes。100k 步下三档实测外推:
+#   interval=5000, episodes=10 → 21 个点,  5.0 min/run,  整批 ~8.1 h  (r1 的配置)
+#   interval=2500, episodes=10 → 41 个点,  9.8 min/run,  整批 ~10.0 h ← r2 采用
+#   interval=2500, episodes=20 → 41 个点, 19.6 min/run,  整批 ~14.1 h
+#
+# 为什么 episodes 保持 10 而不是翻倍:
+#   5 seeds × 10 episodes = 50 个 episode，单个评估点的均值标准误 ≈ 76；
+#   翻倍到 20 只能压到 ≈ 54 —— 而我们要分辨的组间差异在千量级，精度早已过剩。
+#   同样多出来的时间花在"加密评估点"上更有价值: r1 留下的核心问题是
+#   "medium 的领先在第几步被 expert 反超"，这需要时间分辨率，不是精度。
 flags.DEFINE_integer("eval_episodes", 10, "Number of episodes used for evaluation.")
 flags.DEFINE_integer("log_interval", 1000, "Logging interval.")
-flags.DEFINE_integer("eval_interval", 5000, "Eval interval.")
+flags.DEFINE_integer("eval_interval", 2500, "Eval interval.")
 flags.DEFINE_integer("batch_size", 256, "Mini batch size.")
 flags.DEFINE_integer("max_steps", int(1e6), "Number of training steps.")
 flags.DEFINE_integer(
@@ -154,6 +173,22 @@ def main(_):
     env = wrap_gym(env, rescale_actions=True)
     env = gym.wrappers.RecordEpisodeStatistics(env, deque_size=1)
     env.seed(FLAGS.seed)
+    # --- [关键修复 2026-09-15 之二] 补种外层 action/observation space ---
+    # 上游缺陷: wrap_gym 链尾是 RescaleAction，它在 __init__ 里**新建**了一个
+    #   spaces.Box 作为 self.action_space；而 gym.Wrapper.seed() 只把 seed 往下传给
+    #   inner env，从不碰 wrapper 自己的 action_space。
+    #   ⇒ 最外层的 env.action_space（那个新建的 Box）从未被播种，其 np_random
+    #     在首次 .sample() 时由 gym.utils.seeding.np_random(None) 用 os.urandom 取熵。
+    # 实测证据: STUDY/scripts/check_seeding.py 连续两次运行输出不同 ——
+    #     sample[0] = [-0.116318754852, 0.919082343578, ...]
+    #     sample[0] = [ 0.776469647884, -0.012249834836, ...]
+    #   （对比: env.reset() 的初始观测两次完全一致，说明只有 action_space 漏了种。）
+    # 后果: 训练前 start_training=5000 步用的是随机动作
+    #   （`if i < FLAGS.start_training: action = env.action_space.sample()`），
+    #   这 5000 条 transition 进池后整条训练轨迹随之发散。
+    #   ── 与"离线数据集未播种"并列的两个根因之一。
+    env.action_space.seed(FLAGS.seed)
+    env.observation_space.seed(FLAGS.seed)
     # 离线数据集: D4RLDataset 包装 d4rl.qlearning_dataset(env)，首次调用自动下载到 ~/.d4rl。
     # "binary" 任务（Adroit）走 BinaryDataset（AWAC 格式，需手动下载）。
     # not ideal, but works for now:
@@ -162,10 +197,31 @@ def main(_):
     else:
         ds = D4RLDataset(env)
 
+    # --- [关键修复 2026-09-15] 给离线数据集补种 ---
+    # 上游缺陷: Dataset.__init__(dataset_dict, seed=None) 的默认 seed 是 None，
+    #   而 D4RLDataset/BinaryDataset 调 super().__init__(dataset_dict) 时没传 seed，
+    #   于是 self._np_random 保持 None；首次访问 np_random 属性时走 self.seed()（无参）
+    #   → gym.utils.seeding.np_random(None) → create_seed(None) 用 os.urandom 取熵。
+    # 实测后果（这是本轮最重的发现）: 同一 seed、同一配置的两次 run，25k 末点评估值
+    #   7797.5 vs 7019.9，差 10%。因为 --seed 只控制了 env(第175行) / agent(第195行) /
+    #   replay_buffer(第203行) 的 RNG，**离线数据的采样流完全不受控**；
+    #   而每步要抽 batch_size×utd_ratio×offline_ratio = 256 × 20 × 0.5 = 2560 条离线样本，
+    #   这个不受控的流足以让整条训练轨迹在几步之内发散。
+    # 为什么之前没暴露: 三个 RNG 里只漏了这一个，其余全部正确播种，
+    #   所以现象是"看起来有种子"但"同种子跑不出同结果"，很容易被误判成 GPU 非确定性。
+    # 影响: ① 任何"固定 seed 即可复现"的假设都不成立；
+    #       ② 报告的 seed 极差里混着采样噪声，组间小差异（<10%）无法与噪声区分；
+    #       ③ R1 的 A/B/C/D 大差异（数十个百分点）仍成立，只是误差棒被低估。
+    # 修复: 显式补种，使 (seed) 完全决定一次 run。
+    ds.seed(FLAGS.seed)
+
     # 评估环境单独建一个（seed+42），与训练环境解耦，避免评估污染训练状态。
     eval_env = gym.make(FLAGS.env_name)
     eval_env = wrap_gym(eval_env, rescale_actions=True)
     eval_env.seed(FLAGS.seed + 42)
+    # 同理补种外层 space（评估用确定性动作，影响较小，但保持一致以免留下隐患）
+    eval_env.action_space.seed(FLAGS.seed + 42)
+    eval_env.observation_space.seed(FLAGS.seed + 42)
 
     # --- Agent 创建 ---
     # model_cls 从 config 里取（rlpd_config → "SACLearner"），用 globals() 动态实例化，
@@ -295,8 +351,9 @@ def main(_):
                     wandb.log({f"training/{k}": v}, step=i + FLAGS.pretrain_steps)
 
         # --- 周期性评估 + 可选 checkpoint ---
-        # 每 eval_interval 步用确定性策略（eval_actions，取分布 mode）跑 10 个 episode，
-        # 记录 evaluation/return。评估用确定性、训练用随机采样是 RL 标准做法。
+        # 每 eval_interval 步用确定性策略（eval_actions，取分布 mode）跑 eval_episodes 个
+        # episode（R2 起: interval=2500, episodes=20），记录 evaluation/return。
+        # 评估用确定性、训练用随机采样是 RL 标准做法。
         if i % FLAGS.eval_interval == 0:
             eval_info = evaluate(
                 agent,
