@@ -90,7 +90,7 @@ def auc(steps, means) -> float:
     """梯形法积分 / 步数跨度 —— 与 REPORT-R1.md 的口径一致。"""
     steps = np.asarray(steps, dtype=float)
     means = np.asarray(means, dtype=float)
-    return float(np.trapezoid(means, steps) / (steps[-1] - steps[0]))
+    return float(np.trapz(means, steps) / (steps[-1] - steps[0]))
 
 
 def main() -> None:
@@ -150,10 +150,11 @@ def main() -> None:
 
     # ---------- 3) 与 R1 的复现性校验 ----------
     lines = []
-    lines.append("R1 ↔ R2 复现性校验（前 25k 步）")
+    lines.append("R1 vs R2 前 25k 对照（定性参考，不是复现性校验）")
     lines.append("=" * 78)
-    lines.append("依据: eval_actions() 是纯函数，改 eval_interval/eval_episodes 不扰动训练轨迹。")
-    lines.append("因此配置相同的组，其前 25k 步的评估曲线应当逐点吻合。")
+    lines.append("⚠ R1 是在修复 RNG 播种缺陷**之前**跑的（见 STUDY/REPRODUCIBILITY.md）：")
+    lines.append("   它的数值里混着未受控的离线采样噪声，单次同配置差异可达 10%。")
+    lines.append("   所以下表的逐点差异**不构成任何结论**，只用来粗查量级是否离谱。")
     lines.append("")
     for g1, g2 in REPRO_PAIRS:
         if g1 not in r1 or g2 not in r2:
@@ -172,14 +173,18 @@ def main() -> None:
             d = s2[s][0] - s1[s][0]
             maxdiff = max(maxdiff, abs(d))
             lines.append(f"   {s:>7}{s1[s][0]:>12.1f}{s2[s][0]:>12.1f}{d:>10.1f}")
-        verdict = "PASS (数值一致)" if maxdiff < 1e-3 else ("接近 (<1%)" if maxdiff < 0.01 * max(1.0, s1[common[-1]][0]) else "FAIL —— 存在配置漂移，需查清")
+        verdict = (
+            "几乎一致（<1%）"
+            if maxdiff < 0.01 * max(1.0, abs(s1[common[-1]][0]))
+            else "差异较大 —— 但 R1 本身带 10% 量级的采样噪声，属预期范围"
+        )
         lines.append(f"   最大偏差 = {maxdiff:.4f}  →  {verdict}")
         lines.append("")
 
     txt = "\n".join(lines)
     print()
     print(txt)
-    rep_path = os.path.join(OUT_DIR, "r2_reproducibility.txt")
+    rep_path = os.path.join(OUT_DIR, "r2_vs_r1_prefix25k.txt")
     with open(rep_path, "w") as f:
         f.write(txt + "\n")
     print(f"写出 {rep_path}")

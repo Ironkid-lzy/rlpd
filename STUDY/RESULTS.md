@@ -6,12 +6,19 @@
 - 训练机 GPU：`NVIDIA GeForce RTX 5060 Laptop GPU (Blackwell sm_120), 8 GB`
 - 驱动 / CUDA：`570.211.01 / CUDA 12.8`
 - 依赖锁定文件：`STUDY/env-lock/linux-2026-09-13.txt`
-- wandb 项目：`rlpd_locomotion`（正式复现） / `rlpd_ablation`（消融实验）
+- wandb 项目：`rlpd_locomotion`（正式复现） / `rlpd_ablation`（R1 消融） / `rlpd_r2`（R2 数据质量阶梯）
+- ⚠️ 2026-09-15 发现并修复了"同一 seed 不可复现"的缺陷（两个漏种的 RNG），
+  详见 [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md)。**R1 是修复前跑的，其误差棒偏乐观。**
 
 ## 消融实验报告
 
-- **R1 多 seed 消融（5 seeds × A/B/C/D，halfcheetah，25k 步）**：见 [`REPORT-R1.md`](REPORT-R1.md)
-  - 原始数据与曲线：`results/r1/`
+- **R1 多 seed 消融（5 seeds × A/B。
+  - ⚠️ 报告顶部的勘误：其中"medium 末点与 expert 持平"这一条已被 R2 推翻。
+- **R2 数据质量阶梯（5 seeds × 5 组，halfcheetah，100k 步）**：见 [`REPORT-R2.md`](REPORT-R2.md)
+  - 原始数据：`results/r2/r2_5seed_eval_return.csv`、`results/r2/r2_vs_r1_prefix25k.txt`
+  - 一句话结论：100k 下数据质量阶梯严格单调
+    （expert 11447 > medium 10118 > medium-replay 9358 > random 8946 > 纯在线 7611）；
+    但 expert 数据在 10–20k 区间反而最差，交叉点约在 21k
   - 一句话结论：离线数据与高 UTD 都显著提升样本效率；medium 数据前期优于 expert（约 2.3×）、
     末点持平（差 3% 以内），且跨种子稳定性远好于 expert。
 
