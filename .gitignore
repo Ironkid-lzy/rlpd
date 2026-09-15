@@ -134,5 +134,5 @@ MUJOCO_LOG.TXT
 
 .vscode
 
-# 批跑日志输出（stdout / 分析中间产物，不入库）
-results/
+# 批跑日志输出（仅忽略仓库根目录的 results/，STUDY/results 下的实验数据要入库）
+/results/
