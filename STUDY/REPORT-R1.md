@@ -1,5 +1,26 @@
 # R1 多 seed 消融复现报告
 
+> ## ⚠️ 勘误（2026-09-15）：本报告中"小于 10% 的组间差异"不可靠
+>
+> 2026-09-15 发现代码库存在**同一 seed 不可复现**的缺陷（两个漏种的 RNG，根因与
+> 证据见 `REPRODUCIBILITY.md`）。用与 `r1_B_rlpd_expert` seed 0 **逐字相同**的配置
+> 重跑，25k 末点评估值得到 7019.9，而本报告记的是 7797.5 —— **相差 10%**。
+>
+> **影响范围**
+>
+> | 结论 | 状态 |
+> |---|---|
+> | 1. 离线数据的价值（B vs A，+61%） | ✅ 仍成立（差异远大于噪声） |
+> | 2. 高 UTD 的价值（B vs C，-63%） | ✅ 仍成立 |
+> | 3. medium 前期更好、末点持平（D vs B，3.5%） | ❌ **不可靠，属噪声量级** |
+> | 4. 交互效应（A vs C） | ✅ 仍成立 |
+>
+> 另外，"expert 组 25k 时 seed 极差 3746"这个数字里混着采样噪声，
+> 不能当作纯 seed 方差使用。
+>
+> R2 已在修复后重跑（100k 步、random/medium-replay/medium/expert 四档质量阶梯），
+> 用于替换结论 3。
+
 > 5 seeds 配对实验（seed = 0–4），halfcheetah，25k env steps，`start_training=5000`，
 > `eval_interval=5000`，每 5k 步用确定性策略评估 10 episodes。
 > 原始数据：`results/r1/r1_abcd_5seed_eval_return.csv`（mean/min/max）
@@ -18,7 +39,7 @@
 batch_size=256、网络结构、seed 集合 `[0,1,2,3,4]`，因此每组之间**只差一个变量**。
 
 ## 结果（5 seed 均值）
-
+![r1 results](results/r1/r1_abcd_5seed_curve.png)
 | env steps | A online | B rlpd_expert | C utd1 | D rlpd_medium |
 |---|---|---|---|---|
 | 0 | 34.7 | 34.7 | 34.7 | 34.7 |
