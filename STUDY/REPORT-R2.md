@@ -28,6 +28,8 @@
 
 ## 结果
 
+![dataset quality curve](results/r2/r2_dataset_quality_curve.png)
+
 | env steps | A online | random | medium-replay | medium | expert |
 |---|---|---|---|---|---|
 | 0 | 32.9 | 32.9 | 32.9 | 32.9 | 32.9 |
